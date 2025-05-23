@@ -1,0 +1,222 @@
+zabbix_export:
+  version: '6.4'
+  media_types:
+    - name: 'Twilio Voice Call (Webhook)'
+      type: WEBHOOK
+      parameters:
+        - name: TwilioAccountSid
+          value: '{$TWILIO_ACCOUNT_SID}'
+        - name: TwilioAuthToken
+          value: '{$TWILIO_AUTH_TOKEN}'
+        - name: TwilioFromNumber
+          value: '{$TWILIO_FROM_NUMBER}'
+        - name: ZabbixEventSendTo # For the 'To' field in Twilio API
+          value: '{ALERT.SENDTO}'
+        - name: ZabbixEventID # Used by the script for spacing digits
+          value: '{EVENT.ID}'
+        - name: ZabbixTwimlPayload # This will be {ALERT.MESSAGE} from the message template
+          value: '{ALERT.MESSAGE}'
+        - name: TwilioVoiceName
+          value: '{$TWILIO_VOICE_NAME_DEFAULT}' # e.g., Google.en-US-Chirp3-HD-Aoede
+        - name: TwilioVoiceLanguage
+          value: '{$TWILIO_VOICE_LANG_DEFAULT}' # e.g., en-US
+      script: |
+        var req = new HttpRequest();
+        var params = JSON.parse(value);
+
+        Zabbix.Log(4, '[Twilio Voice Call] Received request parameters: ' + value);
+
+        // Placeholder checks
+        var accountSidPlaceholder = '{' + '$' + 'TWILIO_ACCOUNT_SID' + '}';
+        var authTokenPlaceholder = '{' + '$' + 'TWILIO_AUTH_TOKEN' + '}';
+        var fromNumberPlaceholder = '{' + '$' + 'TWILIO_FROM_NUMBER' + '}';
+        var voiceNamePlaceholder = '{' + '$' + 'TWILIO_VOICE_NAME_DEFAULT' + '}';
+        var voiceLangPlaceholder = '{' + '$' + 'TWILIO_VOICE_LANG_DEFAULT' + '}';
+
+        if (!params.TwilioAccountSid || params.TwilioAccountSid === accountSidPlaceholder) {
+            throw '[Twilio Voice Call] Twilio Account SID is not configured.';
+        }
+        if (!params.TwilioAuthToken || params.TwilioAuthToken === authTokenPlaceholder) {
+            throw '[Twilio Voice Call] Twilio Auth Token is not configured.';
+        }
+        if (!params.TwilioFromNumber || params.TwilioFromNumber === fromNumberPlaceholder) {
+            throw '[Twilio Voice Call] Twilio From Number is not configured.';
+        }
+        if (!params.ZabbixEventSendTo) {
+            throw '[Twilio Voice Call] Recipient phone number (ZabbixEventSendTo) is missing.';
+        }
+        if (!params.ZabbixTwimlPayload) {
+            throw '[Twilio Voice Call] TwiML Payload (ZabbixTwimlPayload from {ALERT.MESSAGE}) is missing.';
+        }
+        if (!params.ZabbixEventID) {
+            throw '[Twilio Voice Call] Zabbix Event ID (ZabbixEventID) is missing.';
+        }
+
+        var accountSid = params.TwilioAccountSid;
+        var authToken = params.TwilioAuthToken;
+        var fromNumber = params.TwilioFromNumber;
+        var toNumber = params.ZabbixEventSendTo;
+
+        var voiceName = (params.TwilioVoiceName && params.TwilioVoiceName !== voiceNamePlaceholder) ? params.TwilioVoiceName : 'Google.en-US-Chirp3-HD-Aoede';
+        var voiceLang = (params.TwilioVoiceLanguage && params.TwilioVoiceLanguage !== voiceLangPlaceholder) ? params.TwilioVoiceLanguage : 'en-US';
+        
+        var rawTwiml = params.ZabbixTwimlPayload;
+
+        function spaceDigits(text) {
+            if (typeof text !== 'string' || text === null) return '';
+            return text.split('').join(' ');
+        }
+
+        var eventId = params.ZabbixEventID ? params.ZabbixEventID.toString() : '';
+        var eventIdSpaced = spaceDigits(eventId);
+        // Assuming Original Problem ID is the same as the current Event ID for this alert context
+        var originalProblemIdSpaced = eventIdSpaced; 
+
+        Zabbix.Log(4, '[Twilio Voice Call] Using Voice: ' + voiceName + ', Language: ' + voiceLang);
+        Zabbix.Log(4, '[Twilio Voice Call] Original TwiML Payload: ' + rawTwiml);
+
+        var processedTwiml = rawTwiml.replace(/{VOICE_NAME}/g, voiceName)
+                                     .replace(/{VOICE_LANGUAGE}/g, voiceLang)
+                                     .replace(/{{EVENT.ID_SPACED}}/g, eventIdSpaced)
+                                     .replace(/{{ORIGINAL_PROBLEM_ID_SPACED}}/g, originalProblemIdSpaced);
+        
+        // Basic XML validation for <Response> tag
+        if (!processedTwiml.trim().startsWith('<Response>') || !processedTwiml.trim().endsWith('</Response>')) {
+            Zabbix.Log(1, '[Twilio Voice Call] Processed TwiML does not appear to be valid XML starting with <Response> and ending with </Response>. Payload: ' + processedTwiml);
+            throw '[Twilio Voice Call] Processed TwiML is not valid. Check message template.';
+        }
+
+        Zabbix.Log(4, '[Twilio Voice Call] Processed TwiML for API call: ' + processedTwiml);
+        
+        var twilioApiUrl = 'https://api.twilio.com/2010-04-01/Accounts/' + accountSid + '/Calls.json';
+        var requestBody =
+            'To=' + encodeURIComponent(toNumber) +
+            '&From=' + encodeURIComponent(fromNumber) +
+            '&Twiml=' + encodeURIComponent(processedTwiml);
+
+        var credentials = btoa(accountSid + ':' + authToken);
+        req.addHeader('Content-Type: application/x-www-form-urlencoded');
+        req.addHeader('Authorization: Basic ' + credentials);
+        req.addHeader('Accept: application/json');
+
+        Zabbix.Log(3, '[Twilio Voice Call] Attempting to create call. URL: ' + twilioApiUrl);
+        Zabbix.Log(4, '[Twilio Voice Call] Request body for Twilio: ' + requestBody);
+        
+        var response_body_str;
+        try {
+            response_body_str = req.post(twilioApiUrl, requestBody);
+        } catch (error) {
+            Zabbix.Log(1, '[Twilio Voice Call] HTTP POST request failed: ' + error);
+            throw 'Twilio API request failed: ' + error;
+        }
+
+        var statusCode = req.getStatus();
+        Zabbix.Log(3, '[Twilio Voice Call] Response status code: ' + statusCode);
+        Zabbix.Log(4, '[Twilio Voice Call] Response body: ' + response_body_str);
+
+        if (statusCode < 200 || statusCode >= 300) {
+            var errorMessage = '[Twilio Voice Call] Call creation failed. Status: ' + statusCode;
+            if (response_body_str) {
+                try {
+                    var error_details = JSON.parse(response_body_str);
+                    if (error_details.message) errorMessage += '. Message: ' + error_details.message;
+                    if (error_details.code) errorMessage += '. Code: ' + error_details.code;
+                    if (error_details.more_info) errorMessage += '. More info: ' + error_details.more_info;
+                } catch (e) {
+                    errorMessage += '. Response: ' + response_body_str;
+                }
+            }
+            Zabbix.Log(1, errorMessage);
+            throw errorMessage;
+        }
+
+        var callSid = 'unknown';
+        var callStatus = 'unknown';
+        if (response_body_str) {
+            try {
+                var responseJson = JSON.parse(response_body_str);
+                callSid = responseJson.sid || callSid;
+                callStatus = responseJson.status || callStatus;
+            } catch (e) {
+                Zabbix.Log(2, '[Twilio Voice Call] Could not parse JSON response from Twilio: ' + e);
+            }
+        }
+        Zabbix.Log(3, '[Twilio Voice Call] Successfully initiated call. SID: ' + callSid + ', Status: ' + callStatus);
+        return JSON.stringify({
+            "message": "Twilio call initiated successfully.",
+            "call_sid": callSid,
+            "call_status": callStatus
+        });
+      message_templates:
+        - event_source: TRIGGERS
+          operation_mode: PROBLEM
+          subject: 'Problem: {EVENT.NAME}' # Subject for Zabbix UI, not used in TwiML by script
+          message: |
+            <Response>
+                <Say voice="{VOICE_NAME}" language="{VOICE_LANGUAGE}">This is an automated alert from Zabbix.</Say>
+                <Pause length="short"/>
+                <Say voice="{VOICE_NAME}" language="{VOICE_LANGUAGE}">Problem started at {EVENT.TIME} on {EVENT.DATE}.</Say>
+                <Pause length="short"/>
+                <Say voice="{VOICE_NAME}" language="{VOICE_LANGUAGE}">Problem name: {EVENT.NAME}.</Say>
+                <Pause length="short"/>
+                <Say voice="{VOICE_NAME}" language="{VOICE_LANGUAGE}">Host: {HOST.NAME}.</Say>
+                <Pause length="short"/>
+                <Say voice="{VOICE_NAME}" language="{VOICE_LANGUAGE}">Severity: {EVENT.SEVERITY}.</Say>
+                <Pause length="short"/>
+                <Say voice="{VOICE_NAME}" language="{VOICE_LANGUAGE}">Operational data: {EVENT.OPDATA}.</Say>
+                <Pause length="short"/>
+                <Say voice="{VOICE_NAME}" language="{VOICE_LANGUAGE}">Original problem ID: {{ORIGINAL_PROBLEM_ID_SPACED}}.</Say>
+                <Pause length="short"/>
+                <Say voice="{VOICE_NAME}" language="{VOICE_LANGUAGE}">Event ID: {{EVENT.ID_SPACED}}.</Say>
+                <Hangup/>
+            </Response>
+        - event_source: TRIGGERS
+          operation_mode: RECOVERY
+          subject: 'Resolved in {EVENT.DURATION}: {EVENT.NAME}' # Subject for Zabbix UI
+          message: |
+            <Response>
+                <Say voice="{VOICE_NAME}" language="{VOICE_LANGUAGE}">This is an automated alert from Zabbix.</Say>
+                <Pause length="short"/>
+                <Say voice="{VOICE_NAME}" language="{VOICE_LANGUAGE}">Problem resolved at {EVENT.RECOVERY.TIME} on {EVENT.RECOVERY.DATE}.</Say>
+                <Pause length="short"/>
+                <Say voice="{VOICE_NAME}" language="{VOICE_LANGUAGE}">Problem name: {EVENT.NAME}.</Say>
+                <Pause length="short"/>
+                <Say voice="{VOICE_NAME}" language="{VOICE_LANGUAGE}">Host: {HOST.NAME}.</Say>
+                <Pause length="short"/>
+                <Say voice="{VOICE_NAME}" language="{VOICE_LANGUAGE}">Duration: {EVENT.DURATION}.</Say>
+                <Hangup/>
+            </Response>
+        - event_source: TRIGGERS
+          operation_mode: UPDATE
+          subject: 'Updated problem in {EVENT.AGE}: {EVENT.NAME}' # Subject for Zabbix UI
+          message: |
+            <Response>
+                <Say voice="{VOICE_NAME}" language="{VOICE_LANGUAGE}">This is an automated alert from Zabbix.</Say>
+                <Pause length="short"/>
+                <Say voice="{VOICE_NAME}" language="{VOICE_LANGUAGE}">Problem acknowledged by {USER.FULLNAME} at {EVENT.ACK.TIME} on {EVENT.ACK.DATE}.</Say>
+                <Pause length="short"/>
+                <Say voice="{VOICE_NAME}" language="{VOICE_LANGUAGE}">Acknowledgement message: {EVENT.ACK.MESSAGE}.</Say>
+                <Hangup/>
+            </Response>
+        - event_source: DISCOVERY
+          operation_mode: PROBLEM
+          subject: 'Discovery: {DISCOVERY.DEVICE.STATUS} {DISCOVERY.DEVICE.IPADDRESS}'
+          message: |
+            Discovery rule: {DISCOVERY.RULE.NAME}
+            
+            Device IP: {DISCOVERY.DEVICE.IPADDRESS}
+            Device DNS: {DISCOVERY.DEVICE.DNS}
+            Device status: {DISCOVERY.DEVICE.STATUS}
+            Device uptime: {DISCOVERY.DEVICE.UPTIME}
+            
+            Device service name: {DISCOVERY.SERVICE.NAME}
+            Device service port: {DISCOVERY.SERVICE.PORT}
+            Device service status: {DISCOVERY.SERVICE.STATUS}
+            Device service uptime: {DISCOVERY.SERVICE.UPTIME}
+        - event_source: AUTOREGISTRATION
+          operation_mode: PROBLEM
+          subject: 'Autoregistration: {HOST.HOST}'
+          message: |
+            Host name: {HOST.HOST}
+            Host IP: {HOST.IP}
+            Agent port: {HOST.PORT}
