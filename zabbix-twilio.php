@@ -1,41 +1,41 @@
 <?php
 // **********************************************
-// *** 外部ファイル ***
+// *** External files ***
 // **********************************************
-// configファイル
+// config file
 require_once '/usr/lib/zabbix/alertscripts/zabbix-twilio/config.php';
-// Twilio PHP ライブラリ
+// Twilio PHP Library
 require_once $SCRIPT_DIR . '/lib/twilio-php-latest/Services/Twilio.php';
-// Logger クラス
+// Logger class
 require_once $SCRIPT_DIR . '/Logger.php';
 
 
 // **********************************************
-// *** メイン ***
+// *** Main ***
 // **********************************************
 $log = new Logger ( $LOG_DIR . '/' . basename($_SERVER['SCRIPT_FILENAME'], '.php') . '.log', $DEBUG_FLG );
 $log->info ( 'Start' );
 
 $log->debug ( $_REQUEST );
 
-// コマンド指定確認
+// Check for command specification
 if (! isset ( $_REQUEST ['cmd'] )) {
-	$log->error ( '不正なリクエストです。' );
+	$log->error ( 'Invalid request.' );
 	$log->error ( $_REQUEST );
 	exit ();
 }
 
 Switch ($_REQUEST ['cmd']) {
-	case "register" : // Zabbixへ登録
+	case "register" : // Register to Zabbix
 		if (! isset ( $_REQUEST ['Digits'] )) {
-			$log->info ( "Digits 未入力" );
+			$log->info ( "Digits not entered" );
 			exit ();
 		}
 
-		// 入力キー確認
+		// Check input key
 		Switch ($_REQUEST ['Digits']) {
 			case $DIGITS :
-				$log->info ( 'Zabbixへ登録処理開始' );
+				$log->info ( 'Start Zabbix registration process' );
 
 				$log->debug ( "ZABBIX_API:$ZABBIX_API ZABBIX_USER:$ZABBIX_USER ZABBIX_PASS:$ZABBIX_PASS" );
 				$log->debug ( "MESSAGE_REG_OK:$MESSAGE_REG_OK" );
@@ -47,20 +47,20 @@ Switch ($_REQUEST ['cmd']) {
 					$api = new Zabbix_API ( $ZABBIX_API, $ZABBIX_USER, $ZABBIX_PASS );
 					$api_res = $api->request('event.acknowledge', array (
 							'eventids' => $_REQUEST ['eventid'],
-							'message' => $_REQUEST ['name'] . ' が受電確認済み。'
+							'message' => $_REQUEST ['name'] . ' has confirmed receipt of the call.'
 					) );
 
-					// 登録成功
+					// Registration successful
 					$response->say ( $MESSAGE_REG_OK, array (
 							'voice' => 'woman',
 							'language' => 'ja-JP'
 					) );
 					header ( 'Content-type: text/xml' );
 					print $response;
-					$log->info ( 'Zabbixへの登録成功' );
+					$log->info ( 'Successfully registered with Zabbix' );
 					$log->debug ( $response );
 				} catch ( Exception $e ) {
-					// 登録失敗
+					// Registration failed
 					$response->say ( $MESSAGE_REG_NG, array (
 							'voice' => 'woman',
 							'language' => 'ja-JP'
@@ -69,7 +69,7 @@ Switch ($_REQUEST ['cmd']) {
 					print $response;
 					$log->debug ( $response );
 
-					$log->error ( 'Zabbixへの登録失敗 ' );
+					$log->error ( 'Failed to register with Zabbix ' );
 					$log->error ( $e->getMessage () );
 
 					return $e->getMessage ();
@@ -78,8 +78,8 @@ Switch ($_REQUEST ['cmd']) {
 				break;
 			case 0 :
 			case 1 < $_REQUEST ['Digits'] and $_REQUEST ['Digits'] < 10 :
-				$log->info ( "Digits 不一致 Digits:$_REQUEST ['Digits]" );
-				$log->info ( "再入力処理開始" );
+				$log->info ( "Digits mismatch Digits:$_REQUEST['Digits']" );
+				$log->info ( "Start re-entry process" );
 
 				$log->debug ( "MESSAGE_RETYPE:$MESSAGE_RETYPE" );
 
@@ -91,7 +91,7 @@ Switch ($_REQUEST ['cmd']) {
 						'numDigits' => $DIGITS_NUM
 				) );
 
-				// $$DIGITS$$を置き換え
+				// Replace $$DIGITS$$
 				$message = str_replace ( '$$DIGITS$$', $DIGITS, $MESSAGE_RETYPE );
 				$gather->say ( $message, array (
 						'voice' => 'woman',
@@ -105,14 +105,14 @@ Switch ($_REQUEST ['cmd']) {
 				break;
 		}
 		break;
-	case "notice" : // アラート通知
-		$log->info ( "自動通知処理開始" );
+	case "notice" : // Alert notification
+		$log->info ( "Start automatic notification process" );
 
-		// URLデコード
+		// URL decode
 		$message = urldecode ( $_REQUEST ['message'] );
 		// $$MESSAGE$$
 		$message = str_replace ( '$$MESSAGE$$', $message, $MESSAGE_NOTICE );
-		// $$DIGITS$$を置き換え
+		// Replace $$DIGITS$$
 		$message = str_replace ( '$$DIGITS$$', $DIGITS, $message );
 
 		$log->debug ( "MESSAGE:$message" );
@@ -163,7 +163,7 @@ class Zabbix_API  {
 	}
 
 	public function request($method, $params) {
-		// APIをJSONエンコード
+		// JSON encode the API
 		$content = json_encode( array (
 				'jsonrpc' => '2.0',
 				'method'  => $method,
@@ -172,7 +172,7 @@ class Zabbix_API  {
 				'id'      => '1'
 		));
 
-		// リクエストオプション
+		// Request options
 		$context = stream_context_create(array('http' => array(
 				'method'  => 'POST',
 				'header'  => 'Content-type: application/json-rpc; charset=UTF-8' . "\r\n",
@@ -180,24 +180,24 @@ class Zabbix_API  {
 				'ignore_errors' => true
 		)));
 
-		// リクエスト
+		// Request
 		$res = @file_get_contents ( $this->api_url, false, $context);
 		if (!$res) {
-			throw new Exception('"' . $this->api_url . '"' . 'からデータを取得できません。');
+			throw new Exception('Could not retrieve data from "' . $this->api_url . '".');
 		}
 
-		// JSONデコード
+		// JSON decode
 		$api_res = json_decode($res, true);
 
 		if (!$api_res) {
 			$msg = print_r($res, true);
-			throw new Exception('レスポンスデータがJSON形式ではありません。' . "\n\n" . $msg);
+			throw new Exception('Response data is not in JSON format.' . "\n\n" . $msg);
 		}
 
-		// APIの返り値チェック
+		// Check API return value
 		if (array_key_exists('error', $api_res)) {
 			$msg = print_r($api_res, true);
-			throw new Exception('API エラーが発生しました。' . "\n\n" . $msg);
+			throw new Exception('An API error has occurred.' . "\n\n" . $msg);
 		}
 		return $api_res;
 	}
